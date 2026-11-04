@@ -104,7 +104,8 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist"
             /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"
-            lipo -archs "$app/Contents/MacOS/"*
+            exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            lipo -archs "$app/Contents/MacOS/$exe"
             ditto -c -k --keepParent "$app" "out/Mos-$cfg-adhoc.zip"
           done
           shasum -a 256 out/*.zip
