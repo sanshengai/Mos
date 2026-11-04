@@ -19,6 +19,13 @@ T_PROCESSOR = "MosTests/InputProcessorTests/"
 
 MUTATIONS = [
     (
+        "recorder-mask-drops-device-bits",
+        "Mos/Keys/KeyRecorder.swift",
+        "CGEventFlags.maskSecondaryFn.rawValue |\n        KeyCode.deviceModifiersMask",
+        "CGEventFlags.maskSecondaryFn.rawValue",
+        [T_BINDING + "testRecorderModifierTransition_keepsRightOptionSideFromPressToRelease"],
+    ),
+    (
         "recorder-always-left",
         "Mos/Keys/KeyCode.swift",
         "return isRightOnly ? candidate.right : candidate.left",
