@@ -1,0 +1,115 @@
+# CI-only workflow for validating the right-side modifier fix on a fork.
+# Not part of the upstream PR.
+name: right-side-modifier-ci
+
+on:
+  push:
+    branches: [ci/right-side-modifiers]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.label }})
+    runs-on: macos-26
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: patch
+            ref: ci/right-side-modifiers
+          - label: master-baseline
+            ref: master
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          git log --oneline -1
+      - name: Build (Debug scheme)
+        run: |
+          set -o pipefail
+          xcodebuild -project Mos.xcodeproj -scheme Debug -configuration Debug \
+            -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build 2>&1 \
+            | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+      - name: Unit tests (default Debug test plan)
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          set -o pipefail
+          xcodebuild -project Mos.xcodeproj -scheme Debug -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 \
+            | tee test.log | grep -E "Executed [0-9]+ test|\*\* TEST"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.label }}"
+            grep -E "Executed [0-9]+ tests?, with [0-9]+ failures?" test.log | tail -1 || echo "(no summary line)"
+            echo '```'
+            grep -E "Test Case .* failed" test.log | sort -u || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.label }}
+          path: |
+            build.log
+            test.log
+          retention-days: 7
+
+  mutations:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (each reverted piece must be caught by its tests)
+        run: python3 .github/ci/mutate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-logs
+          path: mutation-*.log
+          retention-days: 7
+
+  package:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Debug and Release apps
+        run: |
+          set -o pipefail
+          for cfg in Debug Release; do
+            xcodebuild -project Mos.xcodeproj -scheme Debug -configuration "$cfg" \
+              -destination 'generic/platform=macOS' -derivedDataPath dd \
+              CODE_SIGNING_ALLOWED=NO build 2>&1 \
+              | tee "build-$cfg.log" | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+          done
+      - name: Ad-hoc sign and zip
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for cfg in Debug Release; do
+            app=$(find "dd/Build/Products/$cfg" -maxdepth 1 -name "*.app" | head -1)
+            echo "$cfg -> $app"
+            codesign --force --deep --sign - "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"
+            lipo -archs "$app/Contents/MacOS/"*
+            ditto -c -k --keepParent "$app" "out/Mos-$cfg-adhoc.zip"
+          done
+          shasum -a 256 out/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mos-right-side-modifiers-apps
+          path: out/*.zip
+          retention-days: 14
